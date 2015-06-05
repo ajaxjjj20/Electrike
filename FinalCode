@@ -1,0 +1,1864 @@
+#include <Keypad.h>     //Include keypad header
+#include <LiquidCrystal.h>    //Include LCD header
+#include <EEPROM.h>       //Include EEPROM header
+#include "StopWatch.h"    //Include stopwatch header
+#include "Rider.h"        //Include Rider class/header
+#include "EEPROMAnything.h"  //Include EEPROM anything header
+#include "SPI.h"
+#include "LPD8806.h"
+
+#define threshValue 650
+
+const byte ROWS = 4;    //Four rows
+const byte COLS = 3;    //Three columns
+char keys[ROWS][COLS] = {            //Define the symbols on the buttons of the keypad
+  {
+    '1','2','3'                                                                                                                                                                          }
+  ,
+  {
+    '4','5','6'                                                                                                                                                                          }
+  ,
+  {
+    '7','8','9'                                                                                                                                                                          }
+  ,
+  {
+    '*','0','#'                                                                                                                                                                          }
+};
+
+byte rowPins[ROWS] = {
+  3,4,5,6};    //Connect to the row pinouts of the keypad
+byte colPins[COLS] = {
+  14,15,2};       //Connect to the column pinouts of the keypad
+long lastDebounceTime = 0;             //The last time a button was pressed
+const long debounceDelay = 1000;              //The debounce delay constant
+bool nameEntered = false;
+int cursorColPos = 0;        //Store the column position of the sensor
+int cursorRowPos = 0;        //Store the row position of the sensor
+int state = 0;               //State 0 = Mastermind state
+//State 1 = Riding State
+//State 2 = Create Rider State start -> Enter Initials
+//State 3 = Load Rider State
+//State 4 = Toggle Night Mode
+//State 5 = Enter Age
+bool masterMind = true;      //If we are in the starting state
+bool rideMode = false;       //If we are in the riding state
+bool startRide = false;      //If we are starting the ride
+bool startCreateRider = false;  //If we are starting to input initials, this is so we can print instructions
+bool startEnterAge = false;  //If we are starting to enter age, to print instructions
+bool genderEntered = false;    //If we are in the enter gender state
+bool findRider = false;      //If we are in the find rider state
+bool nightMode = false;    //If we are in the toggle night mode state
+uint8_t headlightPin = 13;
+
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);      //Initialize an instance of class NewKeypad
+LiquidCrystal lcd(7,8,9,10,11,12);        //Initialize the lcd
+
+//LED Strip Variables
+uint8_t numPixels = 32;
+uint8_t dataPinLEDs = 16;
+uint8_t clockPinLEDs = 17;
+uint32_t lastLEFTToggleTime = 0;
+uint32_t lastRIGHTToggleTime = 0;
+uint32_t lastBOTHToggleTime = 0;
+const uint16_t LEDTogglePeriod = 500;
+bool LeftSignalON = false;          //Set up booleans needed for turn signal/brake functions
+bool LeftColorON = false;
+bool RightSignalON = false;
+bool RightColorON = false;
+bool BothSignalsON = false;
+bool BothColorON = false;
+bool Brakeprevious = false;
+bool BrakesON = false;
+const uint8_t BrakeSwitch1Pin = 20;
+const uint8_t BrakeSwitch2Pin = 21;
+LPD8806 strip = LPD8806(numPixels, dataPinLEDs, clockPinLEDs);    //Initialize LED strip
+volatile bool LeftTurnSignal = false;
+volatile bool RightTurnSignal = false;
+volatile unsigned long last_millis_left = 0;
+volatile unsigned long current_millis_left = 0;
+volatile unsigned long last_millis_right = 0;
+volatile unsigned long current_millis_right = 0;
+uint16_t debouncing_time = 300;
+
+StopWatch myWatch;          //Create a stopwatch
+uint8_t hours = 0;          //Time variables for riding time
+uint8_t minutes = 0;
+uint8_t seconds = 0;
+
+//INTERRUPT VARIABLES
+// these variables are volatile because they are used during the interrupt service routine!
+volatile int rate[10];                    // array to hold last ten IBI values
+volatile unsigned long sampleCounter = 0;          // used to determine pulse timing
+volatile unsigned long lastBeatTime = 0;           // used to find IBI
+volatile int P =512;                      // used to find peak in pulse wave, seeded
+volatile int T = 512;                     // used to find trough in pulse wave, seeded
+//volatile int thresh = 1000;                // used to find instant moment of heart beat, seeded
+volatile int amp = 100;                   // used to hold amplitude of pulse waveform, seeded
+volatile boolean firstBeat = true;        // used to seed rate array so we startup with reasonable BPM
+volatile boolean secondBeat = false;      // used to seed rate array so we startup with reasonable BPM
+int pulsePin = 0;                 // Pulse Sensor purple wire connected to analog pin 0
+int blinkPin = 13;                // pin to blink led at each beat
+int fadePin = 5;                  // pin to do fancy classy fading blink at each beat
+int fadeRate = 0;                 // used to fade LED on with PWM on fadePin
+int green = 0;
+volatile int BPM;                   // used to hold the pulse rate
+volatile int Signal;                // holds the incoming raw data
+volatile int IBI = 600;             // holds the time between beats, must be seeded! 
+volatile boolean Pulse = false;     // true when pulse wave is high, false when it's low
+volatile boolean QS = false;        // becomes true when Arduoino finds a beat.
+volatile int thresh = threshValue;
+
+
+
+
+//Variables to help create a rider
+char key;
+char initials[3];           //Create character array to hold the initials
+int initialsCounter = 0;    //Know how many initials we have stored
+uint32_t startRideTime = 0;
+uint32_t ridingTime = 0;
+int ageSum = 0;
+int ageCounter = 0;
+int ageArray[3] = {
+  0,0,0};
+int HRSum = 0;
+int HRCounter = 0;
+int HRArray[3] = {
+  0,0,0};
+uint16_t weightSum = 0;
+int weightCounter = 0;
+int weightArray[5] = {
+  0,0,0,0,0};
+bool genderMale;
+uint8_t riderCount = 0;
+uint8_t listCounter = 0;
+
+//Current rider information
+char* currentInitials = new char[3];
+uint8_t currentAge = 0;
+uint8_t currentRecommendedHeartRate = 0;
+bool currentMale = false;
+uint16_t currentWeight = 0;
+double caloriesBurnedSum = 0;
+
+char* loadedInitials;
+uint16_t loadedEEPROMAddress;
+Rider loadedRider;
+
+void interruptSetup(void);
+void ledFadeToBeat(void);
+void sendDataToProcessing(char symbol, int data );
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("Starting the test");      //Print this to the computer
+  lcd.begin(20,4);  
+  lcd.print("     Electrike");
+  lcd.setCursor(0,3);
+  lcd.print("           Version 1");
+  delay(3000);
+  lcd.clear();
+  pinMode(13,OUTPUT);
+  myWatch.start();                         //Start timer
+  loadedEEPROMAddress = (EEPROM.read(4094) << 8) | EEPROM.read(4095);
+  Serial.println(loadedEEPROMAddress);
+  loadedRider.Load(loadedEEPROMAddress);
+  for(int i = loadedEEPROMAddress; i < (loadedEEPROMAddress + 10); i++) {
+    Serial.println(EEPROM.read(i));
+  }
+  //Enter Code
+  bool correctCode = false;
+  while(!correctCode) {
+    lcd.clear();
+    lcd.print("Please enter code");
+    char code[4];
+    code[0] = keypad.waitForKey();
+    code[1] = keypad.waitForKey();
+    code[2] = keypad.waitForKey();
+    code[3] = keypad.waitForKey();
+
+    if(code[0] == '0' && code[1] == '5' && code[2] == '1' && code[3] == '2') {
+      correctCode = true;
+      break;
+    }
+    else if(code[0] == '2' && code[1] == '0' && code[2] == '2' && code[3] == '0') {
+      lcd.clear();
+      lcd.print("Press 1 to delete");
+      lcd.setCursor(0,1);
+      lcd.print("all riders...");
+      lcd.setCursor(0,2);
+      lcd.print("Press any other");
+      lcd.setCursor(0,3);
+      lcd.print("button to go back");
+      char deleteKey = keypad.waitForKey();
+      if(deleteKey == '1') {
+        lcd.clear();
+        lcd.print("Deleting...");
+        EEPROM.write(0,0);
+        for(int k = 1; k <= 4095; k++) {
+          EEPROM.write(k,255);
+        }        
+        delay(1000);
+      }
+    }
+    else {
+      lcd.clear();
+      lcd.print("Incorrect...");
+      delay(2000);
+    }
+  }
+
+  //Turn Signal Initialization
+  strip.begin();
+  strip.show();
+  attachInterrupt(5, rightInterruptFunction, FALLING);    //Right interrupt corresponds to digital pin 18
+  attachInterrupt(4, leftInterruptFunction, FALLING);     //Left interrupt corresponds to digital pin 19
+  pinMode(18, INPUT_PULLUP);
+  pinMode(19, INPUT_PULLUP);
+
+//  pinMode(LeftTurnButtonPin, INPUT_PULLUP);
+//  pinMode(RightTurnButtonPin, INPUT_PULLUP);
+  pinMode(BrakeSwitch1Pin, INPUT_PULLUP);
+  pinMode(BrakeSwitch2Pin, INPUT_PULLUP);
+  pinMode(headlightPin, OUTPUT);
+
+  //INTERRUPT SHENANIGANS
+  interruptSetup();
+  pinMode(blinkPin,OUTPUT);         // pin that will blink to your heartbeat!
+  pinMode(fadePin,OUTPUT);          // pin that will fade to your heartbeat!
+
+
+}
+
+char* getInitials(void);
+uint16_t searchEEPROM(char char1, char char2, char char3);
+void TurnSignal(uint8_t isLeft, LPD8806 strip, bool initial);
+void Brakes(LPD8806 strip, bool brakelights);
+void LeftTurn(LPD8806 strip, uint32_t color);
+void RightTurn(LPD8806 strip, uint32_t color);
+
+
+void loop() {
+  switch(state) {
+  case 0:
+    lcd.clear();
+    lcd.print("1=Start Ride Stats");          //Print this to the LCD
+    lcd.setCursor(0,1);
+    lcd.print("2=Create New Rider");
+    lcd.setCursor(0,2);
+    lcd.print("3=Load Rider");
+    lcd.setCursor(0,3);
+    lcd.print("4=Night mode, #=more");
+    state = 12;
+    //do {
+    //key = keypad.waitForKey();
+    //    } 
+    //    while(!state);
+    break;
+  case 1:
+    key = keypad.getKey();
+    if(key == '1') {
+      state = 0;
+      startRide = true;
+      rideMode = false;
+      break;
+      Serial.println("Going back to main menu due to a button being pressed");
+    }
+    if(startRide) {
+      if(loadedEEPROMAddress == 0) {
+        lcd.clear();
+        lcd.print("No rider loaded...");
+        state = 0;
+        delay(2000);
+        Serial.println("No rider loaded...");
+        break;
+      }
+      lcd.clear();
+      lcd.print("Starting Ride!");
+      delay(1000);
+      caloriesBurnedSum = 0;
+      startRideTime = myWatch.elapsed();
+      ridingTime = myWatch.elapsed();
+      startRide = false;
+      lcd.clear();
+      lcd.setCursor(0,2);
+      lcd.print("Cals Burned:");
+      lcd.print((uint16_t)caloriesBurnedSum); 
+
+      //Starts printing weird stuff here...     
+      //      Serial.println("Calories burned sum");
+      //      Serial.println((uint16_t)caloriesBurnedSum);
+      //char tempInitials[3];
+      //tempInitials[0] = EEPROM.read(loadedEEPROMAddress);
+      //tempInitials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+      //tempInitials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+      //      Rider loadedRider(tempInitials, EEPROM.read(loadedEEPROMAddress + 3), EEPROM.read(loadedEEPROMAddress + 4), EEPROM.read(loadedEEPROMAddress + 5), (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7));
+    }
+    if(rideMode) {
+      lcd.setCursor(0,0);
+      //      lcd.clear();
+      lcd.print("Heart Rate: ");
+      lcd.print(BPM);
+      Serial.println("Heartrate: ");
+      Serial.println(BPM);
+      lcd.print(" BPM ");
+      lcd.setCursor(0,1);
+      //Serial.println("Recommended HeartRate of loaded rider:");
+      //Serial.println(loadedRider.recommendedHeartRate);
+      if(((int)loadedRider.recommendedHeartRate - BPM) > 5) {
+        lcd.print("INCREASE HR         ");
+      } 
+      else if((BPM - (int)loadedRider.recommendedHeartRate) > 5) {
+        lcd.print("DECREASE HR         ");
+      }
+      else {
+        lcd.print("Stay at current HR  ");
+      }
+      if((myWatch.elapsed() - ridingTime) > 30000)
+      {
+        caloriesBurnedSum += loadedRider.CalculateCaloriesBurned((myWatch.elapsed() - ridingTime)/1000, BPM);
+        ridingTime = myWatch.elapsed();
+        lcd.setCursor(0,2);
+        lcd.print("Cals Burned:");
+        lcd.print((uint16_t)caloriesBurnedSum);
+        Serial.print("Updating calories burned: ");
+        Serial.println(caloriesBurnedSum);
+      }
+      lcd.setCursor(0,3);                 //Set the cursor to the left side of the bottom row to display the number of seconds since we started
+      hours = ((myWatch.elapsed() - startRideTime)/1000) / 3600;        //Convert to hours
+      minutes = (((myWatch.elapsed() - startRideTime)/1000) - 3600 * hours) / 60;
+      seconds = (((myWatch.elapsed() - startRideTime)/1000) - 3600 * hours - 60 * minutes);
+      lcd.print(hours);
+      lcd.print(":");
+      if(minutes < 10) {
+        lcd.print("0");
+        lcd.print(minutes);
+      }
+      else {
+        lcd.print(minutes);
+      }
+      lcd.print(":");
+      if(seconds < 10) {
+        lcd.print("0");
+        lcd.print(seconds);  //Print the number of seconds since the start of the microcontroller
+      }
+      else {
+        lcd.print(seconds);
+      }
+      lcd.print("  ");
+      if(BrakesON == true) {
+        lcd.print("B");
+      }
+      else {
+        lcd.print(" ");
+      }
+      if(LeftTurnSignal) {
+        lcd.print("L");
+      }
+      else {
+        lcd.print(" ");
+      }
+      if(RightTurnSignal) {
+        lcd.print("R");
+      }
+      else {
+        lcd.print(" ");
+      }
+      lcd. print("  1=Menu");
+    }
+    break;
+  case 2:
+    currentInitials = getInitials();
+    if(currentInitials[0] == 0 && currentInitials[1] == 0 && currentInitials[2] == 0) {
+      state = 0;
+    }
+    else {
+      state = 5;
+      ageSum = 0;
+      startEnterAge = true;
+      ageCounter = 0;
+      ageArray[0] = 0;
+      ageArray[1] = 0;
+      ageArray[2] = 0;
+      if(searchEEPROM(currentInitials[0],currentInitials[1],currentInitials[2])) {      //This if statement is to ensure we do not store another rider that has the same name as a previous rider
+        Serial.println("We found the same ID...");
+        lcd.clear();
+        lcd.print(currentInitials[0]);
+        lcd.print(currentInitials[1]);
+        lcd.print(currentInitials[2]);
+        lcd.print(" already exists");
+        lcd.setCursor(0,1);
+        lcd.print("Going to main menu");
+        lcd.setCursor(0,2);
+        lcd.print("Create a new rider");
+        state = 0;
+        delay(3000);
+      }
+    }
+    Serial.println("We are after the getInitials function...");
+    break;
+  case 3:      //Load the rider state
+    lcd.clear();
+    lcd.print("Load Rider!");
+    delay(1000);
+    loadedInitials = getInitials();
+    if(loadedInitials[0] == 0 && loadedInitials[1] == 0 && loadedInitials[2] == 0) {
+      state = 0;
+      break;
+    }
+    lcd.setCursor(0,2);
+    lcd.print(loadedInitials[0]);
+    lcd.print(loadedInitials[1]);
+    lcd.print(loadedInitials[2]);
+    loadedEEPROMAddress = searchEEPROM(loadedInitials[0],loadedInitials[1],loadedInitials[2]);
+    if(loadedEEPROMAddress == 0) {
+      lcd.clear();
+      lcd.print("No stored rider");
+      lcd.setCursor(0,1);
+      lcd.print("by that name...");
+      delay(3000);
+      state = 0;
+    }
+    loadedRider.initials[0] = EEPROM.read(loadedEEPROMAddress);
+    loadedRider.initials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+    loadedRider.initials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+    loadedRider.age = EEPROM.read(loadedEEPROMAddress + 3);
+    loadedRider.recommendedHeartRate = EEPROM.read(loadedEEPROMAddress + 4);
+    loadedRider.male = EEPROM.read(loadedEEPROMAddress + 5);
+    loadedRider.weight = (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7);
+    loadedRider.Print(lcd);
+    state = 0;
+
+    EEPROM.write(4094, (loadedEEPROMAddress >> 8) & 0xFF);
+    EEPROM.write(4095, loadedEEPROMAddress & 0xFF);
+    Serial.print(EEPROM.read(4094));
+    Serial.println("");
+    Serial.print(EEPROM.read(4095));
+    Serial.println("End of state 3");
+
+
+    break;
+  case 4:      //Toggle night mode state
+    if(!nightMode) {
+      nightMode = true;
+      state = 0;
+      if(nightMode && !BothSignalsON && !RightSignalON && !LeftSignalON && !BrakesON)
+      {
+        for(int i= strip.numPixels()/3.0; i < strip.numPixels()*2.0/3.0; i++) {      //Brakelights bool is false, set each pixel in the middle third of the strip to be off
+          strip.setPixelColor(i, strip.Color(10,0,0));
+        }
+        strip.show();
+        lcd.clear();
+        lcd.print("Dimming LEDs");
+        delay(1000);
+      }
+      digitalWrite(headlightPin, HIGH);  
+    }
+    else {
+      for(int i = strip.numPixels()/3.0; i < strip.numPixels()*2.0/3.0; i++) {      //Brakelights bool is false, set each pixel in the middle third of the strip to be off
+        strip.setPixelColor(i, strip.Color(0,0,0));
+      }
+      strip.show();
+      nightMode = false;  
+      state = 0;
+      digitalWrite(headlightPin, LOW);
+    }
+    lcd.clear();
+    lcd.print("Night Mode Toggled!");
+    delay(1000);
+    break;
+  case 5:      //Enter age state
+    if(startEnterAge) {
+      lcd.clear();
+      lcd.print("Enter your age");
+      lcd.setCursor(0,2);
+      lcd.print("Press * to backspace");
+      lcd.setCursor(0,3);
+      lcd.print("Press # to confirm");
+      startEnterAge = false;
+      lcd.setCursor(0,1);
+    }
+    key = keypad.waitForKey();
+    if(key > 47 && key < 58 && ageCounter < 3) {
+      lcd.setCursor(ageCounter,1);
+      lcd.print(key);
+      ageArray[ageCounter] = key - 48;
+      ageCounter++;
+    }
+    if(key == '*' && ageCounter > 0) {
+      ageCounter--;
+      ageArray[ageCounter] = 0;
+      lcd.setCursor(ageCounter,1);
+      lcd.print(" ");
+    }
+    if(key == '#') {
+      if(ageCounter == 1) {
+        ageSum = ageArray[0];
+      }
+      else if(ageCounter == 2) {
+        ageSum = ageArray[0]*10 + ageArray[1];
+      }
+      else if(ageCounter == 3) {
+        ageSum = ageArray[0]*100 + ageArray[1]*10 + ageArray[2];
+      }
+      if(ageSum > 250) {
+        ageSum = 250;
+      }
+      state = 6;
+      lcd.clear();
+      lcd.print("Age Entered!");
+      delay(1000);
+      lcd.clear();
+      lcd.print("Enter Preferred");
+      lcd.setCursor(0,1);
+      lcd.print("Heart Rate");
+      lcd.setCursor(0,3);
+      lcd.print("*=delete,#=enter");
+      lcd.setCursor(0,2);
+      HRCounter = 0;
+      HRArray[0] = 0;
+      HRArray[1] = 0;
+      HRArray[2] = 0;
+      HRSum = 0;
+      /*lcd.print("Rider Initials: ");
+       lcd.print(initials[0]);
+       lcd.print(initials[1]);
+       lcd.print(initials[2]);
+       lcd.setCursor(0,2);
+       lcd.print("Rider Age: ");
+       lcd.print(ageSum);*/
+    }
+    break;
+  case 6:    //Enter the rider's recommended heart rate
+    key = keypad.waitForKey();
+    if(key > 47 && key < 58 && HRCounter < 3) {
+      lcd.setCursor(HRCounter,2);
+      lcd.print(key);
+      HRArray[HRCounter] = key - 48;
+      HRCounter++;
+    }
+    if(key == '*' && HRCounter > 0) {
+      HRCounter--;
+      HRArray[HRCounter] = 0;
+      lcd.setCursor(HRCounter,2);
+      lcd.print(" ");
+    }
+    if(key == '#') {
+      if(HRCounter == 1) {
+        HRSum = HRArray[0];
+      }
+      else if(HRCounter == 2) {
+        HRSum = HRArray[0]*10 + HRArray[1];
+      }
+      else if(HRCounter == 3) {
+        HRSum = HRArray[0]*100 + HRArray[1]*10 + HRArray[2];
+      }
+      if(HRSum > 250) {
+        HRSum = 250;
+      }
+      state = 7;
+      lcd.clear();
+      lcd.print("Heart Rate Entered!");
+      delay(1000);
+      lcd.clear();
+      lcd.print("Enter Weight (lbs)");
+      lcd.setCursor(0,1);
+      lcd.print("*=back, #=enter");
+      lcd.setCursor(0,2);
+      weightSum = 0;
+      weightCounter = 0;
+      weightArray[0] = 0;
+      weightArray[1] = 0;
+      weightArray[2] = 0;
+      weightArray[3] = 0;
+      weightArray[4] = 0;
+    }
+    break;
+  case 7:      //Enter the rider's weight
+    key = keypad.waitForKey();
+    if(key > 47 && key < 58 && weightCounter < 5) {
+      lcd.setCursor(weightCounter,2);
+      lcd.print(key);
+      weightArray[weightCounter] = key - 48;
+      weightCounter++;
+    }
+    if(key == '*' && weightCounter > 0) {
+      weightCounter--;
+      weightArray[weightCounter] = 0;
+      lcd.setCursor(weightCounter,2);
+      lcd.print(" ");
+    }
+    if(key == '#') {
+      if(weightCounter == 1) {
+        weightSum = weightArray[0];
+      }
+      else if(weightCounter == 2) {
+        weightSum = weightArray[0]*10 + weightArray[1];
+      }
+      else if(weightCounter == 3) {
+        weightSum = weightArray[0]*100 + weightArray[1]*10 + weightArray[2];
+      }
+      else if(weightCounter == 4) {
+        weightSum = weightArray[0]*1000 + weightArray[1]*100 + weightArray[2]*10 + weightArray[3];
+      }
+      else if(weightCounter == 5) {
+        weightSum = weightArray[0]*10000 + weightArray[1]*1000 + weightArray[2]*100 + weightArray[3]*10 + weightArray[4];
+      }
+      if(weightSum > 65535) {
+        weightSum = 65000;
+      }
+      state = 8;
+      lcd.clear();
+      lcd.print("Weight Entered!");
+      delay(1000);
+      lcd.clear();
+      lcd.print("Enter your gender");
+      lcd.setCursor(0,1);
+      lcd.print("4 = Male");
+      lcd.setCursor(0,2);
+      lcd.print("6 = Female");
+    }
+    break;
+  case 8:      //Enter the rider's gender
+    key = keypad.waitForKey();
+    switch(key) {
+    case '1':
+      if(genderEntered) {
+        state = 9;
+        lcd.clear();
+        lcd.print("Gender Entered!");
+        genderEntered = 0;
+      }
+      else {
+        lcd.clear();
+        lcd.print("Enter gender first!");
+        delay(1000);
+        lcd.clear();
+        lcd.print("Enter your gender");
+        lcd.setCursor(0,1);
+        lcd.print("4 = Male");
+        lcd.setCursor(0,2);
+        lcd.print("6 = Female");        
+      }
+      break;
+    case '4':
+      genderMale = true;
+      genderEntered = true;
+      lcd.clear();
+      lcd.print("Male selected!");
+      lcd.setCursor(0,1);
+      lcd.print("Press 1 to continue");
+      lcd.setCursor(0,2);
+      lcd.print("Press * to try again");
+      break;
+    case '6':
+      genderMale = false;
+      genderEntered = true;
+      lcd.clear();
+      lcd.print("Female selected!");
+      lcd.setCursor(0,1);
+      lcd.print("Press 1 to continue");
+      lcd.setCursor(0,2);
+      lcd.print("Press * to try again");
+      break;
+    case '*':
+      genderEntered = false;
+      lcd.clear();
+      lcd.print("Enter your gender");
+      lcd.setCursor(0,1);
+      lcd.print("4 = Male");
+      lcd.setCursor(0,2);
+      lcd.print("6 = Female");
+      break;          
+    default:
+      lcd.setCursor(0,3);
+      lcd.print("Invalid gender");
+      delay(1500);
+      lcd.clear();
+      lcd.print("Enter your gender");
+      lcd.setCursor(0,1);
+      lcd.print("4 = Male");
+      lcd.setCursor(0,2);
+      lcd.print("6 = Female");
+      break;
+    }
+    break;
+
+  case 9:         //Store the rider's information!
+    {
+      Rider rider(currentInitials, ageSum, HRSum, genderMale,weightSum);
+      rider.Print(lcd);
+      riderCount = EEPROM.read(0);
+      rider.EEPROMwrite(1+riderCount*8);
+      EEPROM.write(0, ++riderCount);
+      loadedEEPROMAddress = searchEEPROM(currentInitials[0],currentInitials[1],currentInitials[2]);
+      delay(3000);
+      lcd.clear();
+      lcd.print("Stored rider!");
+      lcd.setCursor(0,1);
+      lcd.print("Loading rider!");
+      delay(2000);
+      loadedRider.initials[0] = EEPROM.read(loadedEEPROMAddress);
+      loadedRider.initials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+      loadedRider.initials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+      loadedRider.age = EEPROM.read(loadedEEPROMAddress + 3);
+      loadedRider.recommendedHeartRate = EEPROM.read(loadedEEPROMAddress + 4);
+      loadedRider.male = EEPROM.read(loadedEEPROMAddress + 5);
+      loadedRider.weight = (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7);
+      EEPROM.write(4094, (loadedEEPROMAddress >> 8) & 0xFF);
+      EEPROM.write(4095, loadedEEPROMAddress & 0xFF);
+      initials[0] = 0;
+      initials[1] = 0;
+      initials[2] = 0;
+      initialsCounter = 0;
+      ageSum = 0;
+      HRSum = 0;
+      genderMale = 0;
+      weightSum = 0;
+      state = 0;
+      break;    
+    }
+
+  case 10:
+    {
+      key = keypad.getKey();
+      switch(key) {
+      case '7':
+        state = 11;
+        break;
+      case '8':
+        if(loadedRider.initials[0] == 0 && loadedRider.initials[1] == 0 && loadedRider.initials[2] == 0) {
+          lcd.clear();
+          lcd.print("No Rider Loaded...");
+          delay(1500);
+        }
+        else {
+          loadedRider.Print(lcd);
+        }
+        lcd.clear();
+        lcd.print("7=Update Rider");
+        lcd.setCursor(0,1);
+        lcd.print("8=Show Current Rider");
+        lcd.setCursor(0,2);
+        lcd.print("9=List Riders");
+        lcd.setCursor(0,3);
+        lcd.print("#=Main Menu");
+        state = 10;
+        break;
+      case '9':
+        state = 13;
+        break;
+      case '#':
+        state = 0;
+        break;
+      }
+      break;
+    }
+
+  case 11:      //Change one of a rider's characteristics
+    {
+      lcd.clear();
+      lcd.print("Which rider are");
+      lcd.setCursor(0,1);
+      lcd.print("we changing?");
+      delay(1000);
+      currentInitials = getInitials();
+      Serial.println("We are after the get initials function");
+      if(currentInitials[0] == 0 && currentInitials[1] == 0 && currentInitials[2] == 0) {
+        state = 0;
+        Serial.println("current Initials all = 0");
+        break;
+      }
+      Serial.println("Here are the initials we got: ");
+      Serial.print(currentInitials[0]);
+      Serial.print(currentInitials[1]);
+      Serial.print(currentInitials[2]);
+      loadedEEPROMAddress = searchEEPROM(currentInitials[0],currentInitials[1],currentInitials[2]);
+      Serial.println("After searchEEPROM");
+      if(loadedEEPROMAddress == 0) {
+        lcd.clear();
+        lcd.print("No stored rider");
+        lcd.setCursor(0,1);
+        lcd.print("by that name...");
+        delay(3000);
+        break;
+      }
+      lcd.clear();
+      lcd.print("What are we changing?");
+      lcd.setCursor(0,1);
+      lcd.print("1=Age, 2=Heart Rate");
+      lcd.setCursor(0,2);
+      lcd.print("3=Gender, 4=Weight");
+      key = keypad.waitForKey();
+      switch(key) {
+      case '1':
+        lcd.clear();
+        lcd.print("Enter new age");
+        lcd.setCursor(0,2);
+        lcd.print("#=Enter");
+        ageCounter = 0;
+        ageArray[0] = 0;
+        ageArray[1] = 0;
+        ageArray[2] = 0;
+        do {
+          key = keypad.waitForKey();
+          if(key > 47 && key < 58 && ageCounter < 3) {
+            lcd.setCursor(ageCounter,1);
+            lcd.print(key);
+            ageArray[ageCounter] = key - 48;
+            ageCounter++;
+          }
+          if(key == '*' && ageCounter > 0) {
+            ageCounter--;
+            ageArray[ageCounter] = 0;
+            lcd.setCursor(ageCounter,1);
+            lcd.print(" ");
+          }
+        } 
+        while(key != '#');
+        if(ageCounter == 1) {
+          ageSum = ageArray[0];
+        }
+        else if(ageCounter == 2) {
+          ageSum = ageArray[0]*10 + ageArray[1];
+        }
+        else if(ageCounter == 3) {
+          ageSum = ageArray[0]*100 + ageArray[1]*10 + ageArray[2];
+        }
+        if(ageSum > 250) {
+          ageSum = 250;
+        }
+        EEPROM.write(loadedEEPROMAddress + 3, ageSum);
+        loadedRider.initials[0] = EEPROM.read(loadedEEPROMAddress);
+        loadedRider.initials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+        loadedRider.initials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+        loadedRider.age = EEPROM.read(loadedEEPROMAddress + 3);
+        loadedRider.recommendedHeartRate = EEPROM.read(loadedEEPROMAddress + 4);
+        loadedRider.male = EEPROM.read(loadedEEPROMAddress + 5);
+        loadedRider.weight = (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7);
+        loadedRider.Print(lcd);
+        state = 0;
+        break;
+      case '2':
+        lcd.clear();
+        lcd.print("Enter heart rate");
+        lcd.setCursor(0,2);
+        lcd.print("#=Enter");
+        HRCounter = 0;
+        HRArray[0] = 0;
+        HRArray[1] = 0;
+        HRArray[2] = 0;
+        HRSum = 0;
+        do {
+          key = keypad.waitForKey();
+          if(key > 47 && key < 58 && HRCounter < 3) {
+            lcd.setCursor(HRCounter,1);
+            lcd.print(key);
+            HRArray[HRCounter] = key - 48;
+            HRCounter++;
+          }
+          if(key == '*' && HRCounter > 0) {
+            HRCounter--;
+            HRArray[HRCounter] = 0;
+            lcd.setCursor(HRCounter,1);
+            lcd.print(" ");
+          }
+        } 
+        while( key != '#');
+        if(HRCounter == 1) {
+          HRSum = HRArray[0];
+        }
+        else if(HRCounter == 2) {
+          HRSum = HRArray[0]*10 + HRArray[1];
+        }
+        else if(HRCounter == 3) {
+          HRSum = HRArray[0]*100 + HRArray[1]*10 + HRArray[2];
+        }
+        if(HRSum > 250) {
+          HRSum = 250;
+        }
+        EEPROM.write(loadedEEPROMAddress + 4, HRSum);
+        loadedRider.initials[0] = EEPROM.read(loadedEEPROMAddress);
+        loadedRider.initials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+        loadedRider.initials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+        loadedRider.age = EEPROM.read(loadedEEPROMAddress + 3);
+        loadedRider.recommendedHeartRate = EEPROM.read(loadedEEPROMAddress + 4);
+        loadedRider.male = EEPROM.read(loadedEEPROMAddress + 5);
+        loadedRider.weight = (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7);
+        loadedRider.Print(lcd);
+        state = 0;
+        break;
+      case '3':
+        lcd.clear();
+        lcd.print("Enter your gender");
+        lcd.setCursor(0,1);
+        lcd.print("4 = Male");
+        lcd.setCursor(0,2);
+        lcd.print("6 = Female");   
+        do {     
+          key = keypad.waitForKey();
+          switch(key) {
+          case '4':
+            lcd.clear();
+            lcd.print("Male selected!");
+            genderEntered = true;
+            EEPROM.write(loadedEEPROMAddress + 5, true);
+            break;
+          case '6':
+            lcd.clear();
+            lcd.print("Female selected!");
+            genderEntered = true;
+            EEPROM.write(loadedEEPROMAddress + 5, false);
+            break;       
+          default:
+            lcd.setCursor(0,3);
+            lcd.print("Invalid gender");
+            delay(1500);
+            lcd.clear();
+            lcd.print("Enter your gender");
+            lcd.setCursor(0,1);
+            lcd.print("4 = Male");
+            lcd.setCursor(0,2);
+            lcd.print("6 = Female");
+            break;
+          }
+        } 
+        while(!genderEntered);
+        genderEntered = false;
+        loadedRider.initials[0] = EEPROM.read(loadedEEPROMAddress);
+        loadedRider.initials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+        loadedRider.initials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+        loadedRider.age = EEPROM.read(loadedEEPROMAddress + 3);
+        loadedRider.recommendedHeartRate = EEPROM.read(loadedEEPROMAddress + 4);
+        loadedRider.male = EEPROM.read(loadedEEPROMAddress + 5);
+        loadedRider.weight = (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7);
+        loadedRider.Print(lcd);
+        state = 0;
+        break;
+      case '4':
+        lcd.clear();
+        lcd.print("Enter weight");
+        lcd.setCursor(0,2);
+        lcd.print("#=Enter");
+        weightSum = 0;
+        weightCounter = 0;
+        weightArray[0] = 0;
+        weightArray[1] = 0;
+        weightArray[2] = 0;
+        weightArray[3] = 0;
+        weightArray[4] = 0;        
+        do {
+          key = keypad.waitForKey();
+          if(key > 47 && key < 58 && weightCounter < 5) {
+            lcd.setCursor(weightCounter,1);
+            lcd.print(key);
+            weightArray[weightCounter] = key - 48;
+            weightCounter++;
+          }
+          if(key == '*' && weightCounter > 0) {
+            weightCounter--;
+            weightArray[weightCounter] = 0;
+            lcd.setCursor(weightCounter,1);
+            lcd.print(" ");
+          }
+        } 
+        while(key != '#');
+        if(weightCounter == 1) {
+          weightSum = weightArray[0];
+        }
+        else if(weightCounter == 2) {
+          weightSum = weightArray[0]*10 + weightArray[1];
+        }
+        else if(weightCounter == 3) {
+          weightSum = weightArray[0]*100 + weightArray[1]*10 + weightArray[2];
+        }
+        else if(weightCounter == 4) {
+          weightSum = weightArray[0]*1000 + weightArray[1]*100 + weightArray[2]*10 + weightArray[3];
+        }
+        else if(weightCounter == 5) {
+          weightSum = weightArray[0]*10000 + weightArray[1]*1000 + weightArray[2]*100 + weightArray[3]*10 + weightArray[4];
+        }
+        if(weightSum > 65535) {
+          weightSum = 65000;
+        }
+
+        EEPROM.write(loadedEEPROMAddress + 6, (weightSum >> 8) & 0xFF);
+        EEPROM.write(loadedEEPROMAddress + 7, weightSum & 0xFF);      
+        loadedRider.initials[0] = EEPROM.read(loadedEEPROMAddress);
+        loadedRider.initials[1] = EEPROM.read(loadedEEPROMAddress + 1);
+        loadedRider.initials[2] = EEPROM.read(loadedEEPROMAddress + 2);
+        loadedRider.age = EEPROM.read(loadedEEPROMAddress + 3);
+        loadedRider.recommendedHeartRate = EEPROM.read(loadedEEPROMAddress + 4);
+        loadedRider.male = EEPROM.read(loadedEEPROMAddress + 5);
+        loadedRider.weight = (EEPROM.read(loadedEEPROMAddress + 6) << 8) | EEPROM.read(loadedEEPROMAddress + 7);
+        loadedRider.Print(lcd);
+        state = 0;
+        break;
+      }
+    }
+
+  case 12:
+    key = keypad.getKey();
+    if(key != 0) {
+      switch(key) {
+      case '1':
+        state = 1;
+        startRide = true;
+        rideMode = true;
+        break;
+      case '2':
+        state = 2;
+        startCreateRider = true;
+        break;
+      case '3':
+        state = 3;
+        break;
+      case '4':
+        state = 4;
+        lcd.clear();
+        lcd.print("Toggle Night Mode");
+        break;
+        /*case '5':
+         for(int j = 0; j<60;j++) {
+         Serial.println(EEPROM.read(j));
+         }
+         Serial.println("");
+         break;
+         case '6':
+         for(int k = 0; k< 60; k++) {
+         EEPROM.write(k,0);
+         }
+         break;
+         case '5':
+         ledFadeToBeat();
+         key = keypad.getKey();
+         if(key == '1') {
+         state = 0;
+         }
+         break;*/
+      case '#':
+        lcd.clear();
+        lcd.print("7=Update Rider");
+        lcd.setCursor(0,1);
+        lcd.print("8=Show Current Rider");
+        lcd.setCursor(0,2);
+        lcd.print("9=List Riders");
+        lcd.setCursor(0,3);
+        lcd.print("#=Main Menu");
+        state = 10;
+        break;
+      default:
+        lcd.clear();
+        lcd.print("Invalid key press");
+        delay(2000);
+        lcd.clear();
+        lcd.print("1=Start Ride Stats");          //Print this to the LCD
+        lcd.setCursor(0,1);
+        lcd.print("2=Create New Rider");
+        lcd.setCursor(0,2);
+        lcd.print("3=Load Rider");
+        lcd.setCursor(0,3);
+        lcd.print("4=Night mode, #=more");
+        break;
+      }
+    }
+    break;
+  case 13:
+    lcd.clear();
+    for(int i = 0; i < 5; i++) {
+      if(EEPROM.read(1) == 255) {    //There are two of the same if statements so that is doesn't print the comma at the end of the list and so that in the next for loop, it still prints nothing
+        lcd.print("There are no riders");
+        break;
+      }
+      lcd.write(EEPROM.read(1+8*i));
+      lcd.write(EEPROM.read(1+8*i+1));
+      lcd.write(EEPROM.read(1+8*i+2));
+      if(EEPROM.read(1+8*(i+1)) == 255) {
+        break;
+      }      
+      lcd.print(',');
+    }
+    lcd.setCursor(0,1);
+    for(int i = 5; i < 10; i++) {
+      if(EEPROM.read(1+8*i) == 255) {
+        break;
+      }
+      lcd.write(EEPROM.read(1+8*i));
+      lcd.write(EEPROM.read(1+8*i+1));
+      lcd.write(EEPROM.read(1+8*i+2));
+      if(EEPROM.read(1+8*(i+1)) == 255) {
+        break;
+      }
+      lcd.print(',');
+    }
+    lcd.setCursor(0,2);
+    for(int i = 10; i < 15; i++) {
+      if(EEPROM.read(1+8*i) == 255) {
+        break;
+      }
+      lcd.write(EEPROM.read(1+8*i));
+      lcd.write(EEPROM.read(1+8*i+1));
+      lcd.write(EEPROM.read(1+8*i+2));
+      if(EEPROM.read(1+8*(i+1)) == 255) {
+        break;
+      }
+      lcd.print(',');
+    }
+    lcd.setCursor(0,3);
+    lcd.print("* = Main Menu");
+    key = keypad.waitForKey();
+    switch(key) {
+    case '*':
+      state = 0;
+      break;
+    }
+    break;
+
+
+
+  }
+  //Enter Turn Signal and Brake code here after the switch statement because it should run as much as often as it can
+  //  if(digitalRead(LeftTurnButtonPin) == LOW && digitalRead(RightTurnButtonPin) == LOW) 
+  if(LeftTurnSignal && RightTurnSignal)
+  {
+    if(BothSignalsON == false) {                  //The turn signal should now be on but it wasn't previously on so we need to intialize it.
+      TurnSignal(2, strip, true);        //The third parameter of TurnSignal is true to indicate this is the first run through of this turn signal
+      BothSignalsON = true;                       //The turn signals are now on, so lets indicate that
+    }
+    else {
+      TurnSignal(2, strip, false);      //Turn signals are on but it is not the first time so the initialize parameter is false
+    }
+  }
+  else {
+    BothSignalsON = false;
+    if(LeftTurnSignal) {              //LOOK UP HOW TO KNOW IF THE BUTTON IS PRESSED, SOMETHING LIKE SET THAT PIN TO READ INSTEAD OF WRITE
+      if(LeftSignalON == false) {                  //The turn signal should now be on but it wasn't previously on so we need to intialize it.
+        TurnSignal(0, strip, true);        //The third parameter of TurnSignal is true to indicate this is the first run through of this turn signal
+        LeftSignalON = true;                       //The turn signals are now on, so lets indicate that
+      }
+      else {
+        TurnSignal(0, strip, false);      //Turn signals are on but it is not the first time so the initialize parameter is false
+      }
+    }
+    else {                                        //Turn signal button isn't pressed, so make sure the LeftSignal boolean is false
+      LeftSignalON = false;
+      LeftTurn(strip, strip.Color(0,0,0));    //Turn the color of the left turn portion of the strip to off since turn signal is off
+    }
+    if(RightTurnSignal) {    //Follows the same pattern as the left turn signal above
+      if(RightSignalON == false) {
+        TurnSignal(1, strip, true);
+        RightSignalON = true;
+      }
+      else {
+        TurnSignal(1, strip, false);
+      }
+    }
+    else {
+      RightSignalON = false;
+      RightTurn(strip, strip.Color(0,0,0));    //Turn the color of the right turn portion of the strip to off since turn signal is off
+    }
+  }
+
+  //Brake pins aren't INPUT_PULLUP which means that when they read low, the sensors are on.  In other words, when the pin is connected do ground the brakes light up
+  //We have to do it this way because if the pins are just INPUT, they receive random impulses from the environment/other pins/etc signaling that the input is high, which is bad
+  if((digitalRead(BrakeSwitch1Pin) == LOW) || (digitalRead(BrakeSwitch2Pin) == LOW)) {      //If either of the pins from the brake switches are high, then we need to turn on the brake lights
+    Brakes(strip, true);
+    Serial.println("Brakes are on");
+  }
+
+  //When the pin is not connected to ground, they stay off
+  if(Brakeprevious && (digitalRead(BrakeSwitch1Pin) == HIGH) && (digitalRead(BrakeSwitch2Pin) == HIGH)) {    //If the signals from brake pins are low and the brakes were previously on, then turn them off
+    Brakes(strip, false);
+    Brakeprevious = false;
+    Serial.println("Brakes are turning off");
+    BrakesON = false;
+  }
+
+  //INTERRUPT STUFF
+  if (QS == true){                       // Quantified Self flag is true when arduino finds a heartbeat
+    fadeRate = 255;                  // Set 'fadeRate' Variable to 255 to fade LED with pulse
+    green = 127;
+    sendDataToProcessing('B',BPM);   // send heart rate with a 'B' prefix
+    //sendDataToProcessing('Q',IBI);   // send time between beats with a 'Q' prefix
+    QS = false;                      // reset the Quantified Self flag for next time    
+    Serial.println("QS = true...");
+  }
+  //ledFadeToBeat();    //This is used to light up LEDs with heartbeat signal, for testing purposes
+
+}
+
+char* getInitials(void)
+{
+  Serial.println("Beginning of getInitials function...");
+  lcd.clear();
+  lcd.print("Enter 3 Letter ID!");
+  lcd.setCursor(0,1);
+  lcd.print("*=delete,1=main menu");
+  startCreateRider = false;
+  cursorColPos = 0;
+  cursorRowPos = 2;
+  lcd.setCursor(cursorColPos, cursorRowPos);
+  int buttonMode = 100;                  //We set it to 100 to start because that button mode does not exist
+  char* name = new char[3];
+  name[0] = 0;
+  name[1] = 0;
+  name[2] = 0;
+  int nameCounter = 0;
+
+  while(true){
+    key = keypad.getKey();
+    switch(key) {
+    case '1':
+      name[0] = 0;
+      name[1] = 0;
+      name[2] = 0;
+      lcd.noBlink();
+      return name;
+    case '2':
+      if(buttonMode == 222 && ((millis() - lastDebounceTime) < debounceDelay)) {      //If the previous button mode was the last of the series but we are still within the debounce time, then go back to the firs of the series
+        buttonMode = 2;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);                                //Set cursor position
+        lcd.print("A");                                                               //Print first of the series
+        name[nameCounter - 1] = 'A'; 
+        lastDebounceTime = millis();                                                  //Reset debounce timer
+        break;
+      }
+      if(buttonMode == 22 && ((millis() - lastDebounceTime) < debounceDelay)) {      //If the previous button was pressed last time, then rotate to the next letter on that button if it has been less than the debounceDelay since the last button press
+        buttonMode = 222;                                                                //Change the button to the next mode on that button
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);                                   //Since we are changing the previous button, set the cursor position back one
+        lcd.print("C");                                                                  //Print the new letter over the previoius one
+        name[nameCounter - 1] = 'C'; 
+        lastDebounceTime = millis();                                                     //Start counting again now that a button has been pressed
+        break;
+      }
+      else if(buttonMode == 2 && ((millis() - lastDebounceTime) < debounceDelay)) {    //If the previous button was the first of this series, and we haven't passed the bebounce time then proceed
+        buttonMode = 22;                                                               //Set the button mode to the second of this series
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);                                 //Set the cursor and column position, must move back one column because we are replacing with the second letter of the series
+        lcd.print("B");                                                                //Print the second letter of the series
+        name[nameCounter - 1] = 'B'; 
+        lastDebounceTime = millis();                                                   //Reset debounce time
+        break;
+      }
+      if(nameCounter == 3) {                                 //If there are already three initials, then break because we cannot have any more initials
+        break;
+      }
+      buttonMode = 2;                                            //The first time the button is pressed, set it to the first mode
+      lcd.setCursor(cursorColPos, cursorRowPos);                 //Set the cursor position to the correct location
+      lcd.print("A");                                            //Print the first letter for that button
+      name[nameCounter] = 'A'; 
+      nameCounter++;        //Store that letter in the character array for initials and increment the counter
+      cursorColPos++;                                            //Increment the column position
+      lastDebounceTime = millis();                               //Reset the last debounce time
+      break;
+    case '3':                                                    //See case 2 for explanation
+      if(buttonMode == 333 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 3;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("D");
+        name[nameCounter - 1] = 'D'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 33 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 333;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("F");
+        name[nameCounter - 1] = 'F'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 3 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 33;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("E");
+        name[nameCounter - 1] = 'E'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 3;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("D");
+      name[nameCounter] = 'D'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '4':                            //See case 2 for explanation
+      if(buttonMode == 444 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 4;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("G");
+        name[nameCounter - 1] = 'G'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 44 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 444;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("I");
+        name[nameCounter - 1] = 'I'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 4 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 44;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("H");
+        name[nameCounter - 1] = 'H'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 4;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("G");
+      name[nameCounter] = 'G'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '5':                                    //See case 2 for explanation
+      if(buttonMode == 555 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 5;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("J");
+        name[nameCounter - 1] = 'J'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 55 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 555;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("L");
+        name[nameCounter - 1] = 'L'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 5 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 55;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("K");
+        name[nameCounter - 1] = 'K'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 5;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("J");
+      name[nameCounter] = 'J'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '6':                                      //See case 2 for explanation
+      if(buttonMode == 666 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 6;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("M");
+        name[nameCounter - 1] = 'M'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 66 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 666;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("O");
+        name[nameCounter - 1] = 'O'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 6 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 66;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("N");
+        name[nameCounter - 1] = 'N'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 6;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("M");
+      name[nameCounter] = 'M'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '7':                            //See case 2 for explanation
+      if(buttonMode == 7777 && (( millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 7;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("P");
+        name[nameCounter - 1] = 'P'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 777 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 7777;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("S");
+        name[nameCounter - 1] = 'S'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 77 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 777;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("R");
+        name[nameCounter - 1] = 'R'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 7 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 77;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("Q");
+        name[nameCounter - 1] = 'Q'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 7;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("P");
+      name[nameCounter] = 'P'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '8':                                //See case 2 for explanation
+      if(buttonMode == 888 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 8;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("T");
+        name[nameCounter - 1] = 'T'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 88 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 888;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("V");
+        name[nameCounter - 1] = 'V'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 8 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 88;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("U");
+        name[nameCounter - 1] = 'U'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 8;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("T");
+      name[nameCounter] = 'T'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '9':                                //See case 2 for explanation
+      if(buttonMode == 9999 && (( millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 9;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("W");
+        name[nameCounter - 1] = 'W'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 999 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 9999;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("Z");
+        name[nameCounter - 1] = 'Z'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(buttonMode == 99 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 999;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("Y");
+        name[nameCounter - 1] = 'Y'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      else if(buttonMode == 9 && ((millis() - lastDebounceTime) < debounceDelay)) {
+        buttonMode = 99;
+        lcd.setCursor(cursorColPos - 1, cursorRowPos);
+        lcd.print("X");
+        name[nameCounter - 1] = 'X'; 
+        lastDebounceTime = millis();
+        break;
+      }
+      if(nameCounter == 3) {
+        break;
+      }
+      buttonMode = 9;
+      lcd.setCursor(cursorColPos, cursorRowPos);
+      lcd.print("W");
+      name[nameCounter] = 'W'; 
+      nameCounter++;
+      cursorColPos++;
+      lastDebounceTime = millis();
+      break;
+    case '0':
+      break;
+    case '*':        //Case to backspace
+      if(nameCounter == 0) {    //If no initials have been entered, do nothing
+        break;
+      }
+      nameCounter--;      //Decrement the initials counter
+      cursorColPos--;         //Decrement the column position
+      lcd.setCursor(cursorColPos, cursorRowPos);    //Set cursor position
+      lcd.print(" ");         //Print a blank
+      lcd.setCursor(cursorColPos, cursorRowPos);    //Set cursor position where we just printed the blank
+      lcd.blink();            //Blink so the user knows we are ready
+      break;
+    }
+    if(((nameCounter == 3) && (millis() - lastDebounceTime) > debounceDelay) || nameCounter > 3) {    //If initial counter == 3 and we are over the debounce time limit, then proceed
+      Serial.println("We have entered 3 letters...");
+      lcd.setCursor(0,3);        //Set the cursor to the third row
+      lcd.print("Press # to confirm");    //Print instructions
+      key = keypad.waitForKey();      //Wait for the key, nothing else will happen until a key is pressed
+      if(key == '#') {                //If the key that is entered is a 1, then that means it is correct
+        lcd.clear();                  //Clear the screen
+        lcd.print("ID entered!");
+        delay(1000);
+        return name;
+      }
+      if(key == '*') {                //User put in initials incorrectly
+        nameCounter--;            //Decrement counter
+        cursorColPos--;               //Decrement cursor column position
+        lcd.setCursor(cursorColPos, cursorRowPos);    //Set cursor position
+        lcd.print(" ");              //Print a blank
+        lcd.setCursor(cursorColPos, cursorRowPos);    //Set cursor position
+        lcd.blink();              //Blink
+      }
+    }
+    if((millis() - lastDebounceTime) > debounceDelay)  {    
+      lcd.blink();          //If we are entering a new number and not hitting a button repeateadly, then blink the cursor so the user knows it is okay to print another letter
+    }
+    else {
+      lcd.noBlink();        //If we are still within the time limit, don't blink
+    }
+  }
+}
+
+
+uint16_t searchEEPROM(char char1, char char2, char char3)
+{
+  Serial.println("Beginning of searchEEPROM");
+  Serial.println("Value of eeprom 0");
+  Serial.print(EEPROM.read(0));
+  for(uint8_t count = 0; count <= EEPROM.read(0); count++) {
+    Serial.println("Beginning of for loop");
+    if(EEPROM.read(1 + count*8) == char1) {
+      if(EEPROM.read(1 + count*8 + 1) == char2) {
+        if(EEPROM.read(1 + count*8 + 2) == char3) {
+          return 1 + count*8;
+        }
+      }
+    }
+  }
+  Serial.println("End of searchEEPROM");
+  return 0;
+}
+
+
+void TurnSignal(uint8_t LEDstate, LPD8806 strip, bool initial) {
+  int i;
+  uint32_t turnColor;
+  if(LEDstate == 0) {                                                   //If it is the left turn signal, follow this area  
+    if((millis() - lastLEFTToggleTime) > LEDTogglePeriod) {      //If the time lapsed since the last time toggled, then we need to switch the lights from on to off or off to on
+      lastLEFTToggleTime = millis();                            //Update lastToggleTime to the current time, starts over counter
+      if(LeftColorON) {                                     //If the turn signals are on (as in they are orange), then we need them to not emit any light
+        turnColor = strip.Color(0,0,0);                     //Emit no light
+        LeftColorON = false;                                //Set the lights to off
+      }  
+      else {                                                //If the turn signals are off (as in not emitting any light), then we need them to be orange
+        turnColor = strip.Color(255,140,0);                 //Set the lights to on
+        LeftColorON = true;
+      }
+      if(initial) {                                           //If this is the initial or first time signaling, then we want the lights to start out as orange
+        turnColor = strip.Color(255,140,0);                   //We don't want turnColor to be able to change before we sent it to LeftTurn, so we put this initial part right before we call LeftTurn
+        lastLEFTToggleTime = millis();                            //Reset counter since it is being initialized, otherwise the timer would toggle the next go round
+        LeftColorON = true;
+      }
+      LeftTurn(strip, turnColor);
+    }
+  }
+  else if(LEDstate == 1) {    
+    if((millis() - lastRIGHTToggleTime) > LEDTogglePeriod) {      //If the time lapsed since the last time toggled, then we need to switch the lights from on to off or off to on
+      lastRIGHTToggleTime = millis();                            //Update lastToggleTime to the current time, starts over counter
+      if(RightColorON) {
+        turnColor = strip.Color(0,0,0);
+        RightColorON = false;
+      }
+      else {
+        turnColor = strip.Color(255,140,0);
+        RightColorON = true;
+      }
+      if(initial) {
+        turnColor = strip.Color(255,140,0);
+        lastRIGHTToggleTime = millis();
+        RightColorON = true;
+      }
+      RightTurn(strip, turnColor);
+    }
+  }
+  else if(LEDstate == 2){
+    if((millis() - lastBOTHToggleTime) > LEDTogglePeriod) {
+      lastBOTHToggleTime = millis();
+      if(BothColorON) {
+        turnColor = strip.Color(0,0,0);
+        BothColorON = false;
+      }
+      else {
+        turnColor = strip.Color(255,140,0);
+        BothColorON = true;
+      }
+      if(initial) {
+        lastBOTHToggleTime = millis();
+        turnColor = strip.Color(255,140,0);
+        BothColorON = true;
+      }
+      LeftTurn(strip, turnColor);
+      RightTurn(strip, turnColor);
+    }
+  }
+}
+
+void Brakes(LPD8806 strip, bool brakelights) {
+  int i;
+  if(brakelights) {        //If the brakelights bool is set, then follow this
+    for(i = strip.numPixels()/3; i < strip.numPixels()*2.0/3.0; i++) {    //Set each pixel in the middle third of the strip to be red
+      strip.setPixelColor(i, strip.Color(255,0,0));
+    }
+  }
+  else if(!brakelights && nightMode) {
+    for(i = strip.numPixels()/3; i < strip.numPixels()*2.0/3.0; i++) {      //Brakelights bool is false, set each pixel in the middle third of the strip to be off
+      strip.setPixelColor(i, strip.Color(10,0,0));
+    }    
+  }    
+  else if(!brakelights && !nightMode){
+    for(i = strip.numPixels()/3; i < strip.numPixels()*2.0/3.0; i++) {      //Brakelights bool is false, set each pixel in the middle third of the strip to be off
+      strip.setPixelColor(i, strip.Color(0,0,0));
+    }    
+  }
+  strip.show();    //Update the LED strip
+  Brakeprevious = true;
+}
+
+void LeftTurn(LPD8806 strip, uint32_t color) {        //This function turns the left third of the strip into the corresponding color, acting as a turn signal
+  int i;
+  for(i = 0; i < strip.numPixels()/3;i++) {
+    strip.setPixelColor(i, color);      //Set each pixel of the first third of the pixels to the corresponding color
+  }
+  strip.show();
+}
+
+void RightTurn(LPD8806 strip, uint32_t color) {      //This function turns the right third of the strip into the corresponding color, acting as a turn signal
+  int i;
+  for(i = strip.numPixels(); i > strip.numPixels()*2.0/3.0; i--) {
+    strip.setPixelColor(i, color);        //Set each pixel of the last third of pixels to the corresponding color
+  }
+  strip.show();
+}
+
+
+
+
+
+//INTERRUPT STUFF BELOW
+void interruptSetup(){     
+  // Initializes Timer2 to throw an interrupt every 2mS.
+  TCCR2A = 0x02;     // DISABLE PWM ON DIGITAL PINS 3 AND 11, AND GO INTO CTC MODE
+  TCCR2B = 0x06;     // DON'T FORCE COMPARE, 256 PRESCALER 
+  OCR2A = 0X7C;      // SET THE TOP OF THE COUNT TO 124 FOR 500Hz SAMPLE RATE
+  TIMSK2 = 0x02;     // ENABLE INTERRUPT ON MATCH BETWEEN TIMER2 AND OCR2A
+  sei();             // MAKE SURE GLOBAL INTERRUPTS ARE ENABLED      
+} 
+
+// THIS IS THE TIMER 2 INTERRUPT SERVICE ROUTINE. 
+// Timer 2 makes sure that we take a reading every 2 miliseconds
+ISR(TIMER2_COMPA_vect){                         // triggered when Timer2 counts to 124
+  cli();                                      // disable interrupts while we do this
+  Signal = analogRead(pulsePin);              // read the Pulse Sensor 
+  sampleCounter += 2;                         // keep track of the time in mS with this variable
+  int N = sampleCounter - lastBeatTime;       // monitor the time since the last beat to avoid noise
+
+    //  find the peak and trough of the pulse wave
+  if(Signal < thresh && N > (IBI/5)*3){       // avoid dichrotic noise by waiting 3/5 of last IBI
+    if (Signal < T){                        // T is the trough
+      T = Signal;                         // keep track of lowest point in pulse wave 
+    }
+  }
+
+  if(Signal > thresh && Signal > P){          // thresh condition helps avoid noise
+    P = Signal;                             // P is the peak
+  }                                        // keep track of highest point in pulse wave
+
+  //  NOW IT'S TIME TO LOOK FOR THE HEART BEAT
+  // signal surges up in value every time there is a pulse
+  if (N > 250){                                   // avoid high frequency noise
+    if ( (Signal > thresh) && (Pulse == false) && (N > (IBI/5)*3) ){        
+      Pulse = true;                               // set the Pulse flag when we think there is a pulse
+      digitalWrite(blinkPin,HIGH);                // turn on pin 13 LED
+      //      strip.setPixelColor(1,strip.Color(0,255,0));                            //ME
+      //      strip.show();                                                           //ME
+      IBI = sampleCounter - lastBeatTime;         // measure time between beats in mS
+      lastBeatTime = sampleCounter;               // keep track of time for next pulse
+
+      if(secondBeat){                        // if this is the second beat, if secondBeat == TRUE
+        secondBeat = false;                  // clear secondBeat flag
+        for(int i=0; i<=9; i++){             // seed the running total to get a realisitic BPM at startup
+          rate[i] = IBI;                      
+        }
+      }
+
+      if(firstBeat){                         // if it's the first time we found a beat, if firstBeat == TRUE
+        firstBeat = false;                   // clear firstBeat flag
+        secondBeat = true;                   // set the second beat flag
+        sei();                               // enable interrupts again
+        return;                              // IBI value is unreliable so discard it
+      }   
+
+
+      // keep a running total of the last 10 IBI values
+      word runningTotal = 0;                  // clear the runningTotal variable    
+
+      for(int i=0; i<=8; i++){                // shift data in the rate array
+        rate[i] = rate[i+1];                  // and drop the oldest IBI value 
+        runningTotal += rate[i];              // add up the 9 oldest IBI values
+      }
+
+      rate[9] = IBI;                          // add the latest IBI to the rate array
+      runningTotal += rate[9];                // add the latest IBI to runningTotal
+      runningTotal /= 10;                     // average the last 10 IBI values 
+      BPM = 60000/runningTotal;               // how many beats can fit into a minute? that's BPM!
+      QS = true;                              // set Quantified Self flag 
+      // QS FLAG IS NOT CLEARED INSIDE THIS ISR
+    }                       
+  }
+
+  if (Signal < thresh && Pulse == true){   // when the values are going down, the beat is over
+    digitalWrite(blinkPin,LOW);            // turn off pin 13 LED
+    //    strip.setPixelColor(1,strip.Color(0,0,0));              //ME
+    //    strip.show();                                           //ME
+    Pulse = false;                         // reset the Pulse flag so we can do it again
+    amp = P - T;                           // get amplitude of the pulse wave
+    thresh = amp*2.0/3.0 + T;                    // set thresh at 50% of the amplitude        //ME, increased threshhold so less background noise
+    P = thresh;                            // reset these for next time
+    T = thresh;
+  }
+
+  if (N > 2500){                           // if 2.5 seconds go by without a beat
+    thresh = threshValue;                          // set thresh default                              //ME, increased threshhold so less background noise
+    P = 512;                               // set P default
+    T = 512;                               // set T default
+    lastBeatTime = sampleCounter;          // bring the lastBeatTime up to date        
+    firstBeat = true;                      // set these to avoid noise
+    secondBeat = false;                    // when we get the heartbeat back
+  }
+
+  sei();                                   // enable interrupts when youre done!
+}// end isr
+
+void ledFadeToBeat(){
+  /*fadeRate -= 15;                         //  set LED fade value
+   fadeRate = constrain(fadeRate,0,255);   //  keep LED fade value from going into negative numbers!
+   analogWrite(fadePin,fadeRate);          //  fade LED*/
+  green -= 10;
+  green = constrain(green, 0 , 127);
+  for(int i = 0; i < strip.numPixels(); i++) 
+  {
+    strip.setPixelColor(i, strip.Color(0,green,0));
+  }
+  strip.show();
+}
+
+
+void sendDataToProcessing(char symbol, int data ){
+  Serial.print(symbol);                // symbol prefix tells Processing what type of data is coming
+  Serial.println(data);                // the data to send culminating in a carriage return
+}
+
+
+void leftInterruptFunction()      //Wiring: Ground to one end of switch, and then other end of switch to interrupt on MEGA
+{
+  current_millis_left = millis();
+  if((current_millis_left - last_millis_left) >= debouncing_time) {
+    LeftTurnSignal = !LeftTurnSignal;
+    last_millis_left = current_millis_left;
+  }
+}
+
+void rightInterruptFunction()
+{
+  current_millis_right = millis();
+  if((current_millis_right - last_millis_right) >= debouncing_time) {
+    RightTurnSignal = !RightTurnSignal;
+    last_millis_right = current_millis_right;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
